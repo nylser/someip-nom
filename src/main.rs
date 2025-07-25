@@ -140,38 +140,26 @@ pub fn some_ip_value<'a>(
             let (i1, val) = be_i64(input)?;
             (i1, Value::Int(val))
         }
-        SomeIPType::Struct { fields } => {
-            let mut i1 = input;
-            let fields = fields
-                .iter()
-                .map(|(name, def)| {
-                    let (new_input, value) = some_ip_value(i1, def).unwrap();
-                    i1 = new_input;
-                    (name.clone(), value)
-                })
-                .collect();
-            (i1, Value::Struct { fields })
-        }
+        SomeIPType::Struct { fields } => someip_struct(input, fields),
         SomeIPType::DynamicArray {
             length_width,
             element,
         } => {
-            let i1 = input;
-            let (mut i2, length) = match length_width {
+            let (i1, length) = match length_width {
                 8 => {
-                    let (input, length) = be_u8(i1)?;
+                    let (input, length) = be_u8(input)?;
                     (input, length as u64)
                 }
                 16 => {
-                    let (input, length) = be_u16(i1)?;
+                    let (input, length) = be_u16(input)?;
                     (input, length as u64)
                 }
                 32 => {
-                    let (input, length) = be_u32(i1)?;
+                    let (input, length) = be_u32(input)?;
                     (input, length as u64)
                 }
                 64 => {
-                    let (input, length) = be_u64(i1)?;
+                    let (input, length) = be_u64(input)?;
                     (input, length)
                 }
                 _ => {
@@ -179,23 +167,10 @@ pub fn some_ip_value<'a>(
                 }
             };
 
-            let mut elements = Vec::new();
-            for _ in 0..length {
-                let (new_input, value) = some_ip_value(i2, element)?;
-                i2 = new_input;
-                elements.push(value);
-            }
-            (i2, Value::Array(elements))
+            someip_array(i1, element, length)?
         }
         SomeIPType::StaticArray { length, element } => {
-            let mut elements = Vec::new();
-            let mut i1 = input;
-            for _ in 0..*length {
-                let (new_input, value) = some_ip_value(i1, element)?;
-                i1 = new_input;
-                elements.push(value);
-            }
-            (i1, Value::Array(elements))
+            someip_array(input, element, *length as u64)?
         }
         SomeIPType::Enum { variants } => {
             let (i1, variant) = be_u8(input)?;
@@ -219,6 +194,33 @@ pub fn some_ip_value<'a>(
     };
     Ok((i1, value))
     //Ok((input, Value::Int(8)))
+}
+
+fn someip_array<'a>(
+    mut input: &'a [u8],
+    element: &'a SomeIPType,
+    length: u64,
+) -> Result<(&'a [u8], Value), nom::Err<Error<'a>>> {
+    let mut elements = Vec::new();
+    for _ in 0..length {
+        let (new_input, value) = some_ip_value(input, element)?;
+        input = new_input;
+        elements.push(value);
+    }
+    Ok((input, Value::Array(elements)))
+}
+
+fn someip_struct<'a>(input: &'a [u8], fields: &'a [(String, SomeIPType)]) -> (&'a [u8], Value) {
+    let mut i1 = input;
+    let fields = fields
+        .iter()
+        .map(|(name, def)| {
+            let (new_input, value) = some_ip_value(i1, def).unwrap();
+            i1 = new_input;
+            (name.clone(), value)
+        })
+        .collect();
+    (i1, Value::Struct { fields })
 }
 #[derive(Debug, PartialEq)]
 pub enum SomeIPMessageType {
