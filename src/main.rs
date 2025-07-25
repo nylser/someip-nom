@@ -1,6 +1,5 @@
 use nom::{
     IResult, Input, Parser,
-    bytes::take,
     error::{Error as NomError, ErrorKind, ParseError},
     number::{
         streaming::{be_i8, be_i16, be_i32, be_i64},
@@ -145,27 +144,7 @@ pub fn some_ip_value<'a>(
             length_width,
             element,
         } => {
-            let (i1, length) = match length_width {
-                8 => {
-                    let (input, length) = be_u8(input)?;
-                    (input, length as u64)
-                }
-                16 => {
-                    let (input, length) = be_u16(input)?;
-                    (input, length as u64)
-                }
-                32 => {
-                    let (input, length) = be_u32(input)?;
-                    (input, length as u64)
-                }
-                64 => {
-                    let (input, length) = be_u64(input)?;
-                    (input, length)
-                }
-                _ => {
-                    panic!("invalid length width")
-                }
-            };
+            let (i1, length) = someip_dynamic_length(input, length_width)?;
 
             someip_array(i1, element, length)?
         }
@@ -187,6 +166,20 @@ pub fn some_ip_value<'a>(
                 ),
             )
         }
+        SomeIPType::StaticString { length, coding: _ } => {
+            let (i1, str_bytes) = nom::bytes::streaming::take(*length).parse(input)?;
+            let str = String::from_utf8(str_bytes.to_vec()).unwrap();
+            (i1, Value::String(str))
+        }
+        SomeIPType::DynamicString {
+            length_width,
+            coding: _,
+        } => {
+            let (i1, length) = someip_dynamic_length(input, length_width)?;
+            let (i2, str_bytes) = nom::bytes::streaming::take(length).parse(i1)?;
+            let str = String::from_utf8(str_bytes.to_vec()).unwrap();
+            (i2, Value::String(str))
+        }
 
         _ => {
             panic!("not implemented")
@@ -194,6 +187,34 @@ pub fn some_ip_value<'a>(
     };
     Ok((i1, value))
     //Ok((input, Value::Int(8)))
+}
+
+fn someip_dynamic_length<'a>(
+    input: &'a [u8],
+    length_width: &'a u8,
+) -> Result<(&'a [u8], u64), nom::Err<Error<'a>>> {
+    let (i1, length) = match length_width {
+        8 => {
+            let (input, length) = be_u8(input)?;
+            (input, length as u64)
+        }
+        16 => {
+            let (input, length) = be_u16(input)?;
+            (input, length as u64)
+        }
+        32 => {
+            let (input, length) = be_u32(input)?;
+            (input, length as u64)
+        }
+        64 => {
+            let (input, length) = be_u64(input)?;
+            (input, length)
+        }
+        _ => {
+            panic!("invalid length width")
+        }
+    };
+    Ok((i1, length))
 }
 
 fn someip_array<'a>(
@@ -252,6 +273,11 @@ pub struct SomeIPMessage {
 
 pub struct SomeIPMessageBody {}
 
+pub enum StringCoding {
+    Utf8,
+    Utf16,
+}
+
 pub enum SomeIPType {
     Float32,
     Float64,
@@ -277,6 +303,14 @@ pub enum SomeIPType {
     Enum {
         variants: Vec<(u64, String)>,
     },
+    StaticString {
+        length: u32,
+        coding: Option<StringCoding>,
+    },
+    DynamicString {
+        length_width: u8,
+        coding: Option<StringCoding>,
+    },
 }
 
 pub enum Value {
@@ -286,6 +320,7 @@ pub enum Value {
     Struct { fields: Vec<(String, Value)> },
     Array(Vec<Value>),
     Enum(String),
+    String(String),
 }
 
 fn main() {
