@@ -1,8 +1,11 @@
 use nom::{
     IResult, Input, Parser,
-    bits::{bits, bytes, streaming::take},
+    bytes::take,
     error::{Error as NomError, ErrorKind, ParseError},
-    number::streaming::{be_u8, be_u16, be_u32},
+    number::{
+        streaming::{be_i8, be_i16, be_i32, be_i64},
+        streaming::{be_u8, be_u16, be_u32, be_u64},
+    },
 };
 
 /// client id / session id
@@ -100,6 +103,123 @@ pub fn some_ip_header(input: &[u8]) -> IResult<&[u8], SomeIPHeader, Error> {
     ))
 }
 
+pub fn some_ip_value<'a>(
+    input: &'a [u8],
+    def: &'a SomeIPType,
+) -> IResult<&'a [u8], Value, Error<'a>> {
+    let (i1, value) = match def {
+        SomeIPType::UInt8 => {
+            let (i1, val) = be_u8(input)?;
+            (i1, Value::UInt(val.into()))
+        }
+        SomeIPType::UInt16 => {
+            let (i1, val) = be_u16(input)?;
+            (i1, Value::UInt(val.into()))
+        }
+        SomeIPType::UInt32 => {
+            let (i1, val) = be_u32(input)?;
+            (i1, Value::UInt(val.into()))
+        }
+        SomeIPType::UInt64 => {
+            let (i1, val) = be_u64(input)?;
+            (i1, Value::UInt(val))
+        }
+        SomeIPType::SInt8 => {
+            let (i1, val) = be_i8(input)?;
+            (i1, Value::Int(val.into()))
+        }
+        SomeIPType::SInt16 => {
+            let (i1, val) = be_i16(input)?;
+            (i1, Value::Int(val.into()))
+        }
+        SomeIPType::SInt32 => {
+            let (i1, val) = be_i32(input)?;
+            (i1, Value::Int(val.into()))
+        }
+        SomeIPType::SInt64 => {
+            let (i1, val) = be_i64(input)?;
+            (i1, Value::Int(val))
+        }
+        SomeIPType::Struct { fields } => {
+            let mut i1 = input;
+            let fields = fields
+                .iter()
+                .map(|(name, def)| {
+                    let (new_input, value) = some_ip_value(i1, def).unwrap();
+                    i1 = new_input;
+                    (name.clone(), value)
+                })
+                .collect();
+            (i1, Value::Struct { fields })
+        }
+        SomeIPType::DynamicArray {
+            length_width,
+            element,
+        } => {
+            let i1 = input;
+            let (mut i2, length) = match length_width {
+                8 => {
+                    let (input, length) = be_u8(i1)?;
+                    (input, length as u64)
+                }
+                16 => {
+                    let (input, length) = be_u16(i1)?;
+                    (input, length as u64)
+                }
+                32 => {
+                    let (input, length) = be_u32(i1)?;
+                    (input, length as u64)
+                }
+                64 => {
+                    let (input, length) = be_u64(i1)?;
+                    (input, length)
+                }
+                _ => {
+                    panic!("invalid length width")
+                }
+            };
+
+            let mut elements = Vec::new();
+            for _ in 0..length {
+                let (new_input, value) = some_ip_value(i2, element)?;
+                i2 = new_input;
+                elements.push(value);
+            }
+            (i2, Value::Array(elements))
+        }
+        SomeIPType::StaticArray { length, element } => {
+            let mut elements = Vec::new();
+            let mut i1 = input;
+            for _ in 0..*length {
+                let (new_input, value) = some_ip_value(i1, element)?;
+                i1 = new_input;
+                elements.push(value);
+            }
+            (i1, Value::Array(elements))
+        }
+        SomeIPType::Enum { variants } => {
+            let (i1, variant) = be_u8(input)?;
+
+            (
+                i1,
+                Value::Enum(
+                    variants
+                        .iter()
+                        .find(|(i, _)| *i == variant.into())
+                        .unwrap()
+                        .1
+                        .clone(),
+                ),
+            )
+        }
+
+        _ => {
+            panic!("not implemented")
+        }
+    };
+    Ok((i1, value))
+    //Ok((input, Value::Int(8)))
+}
 #[derive(Debug, PartialEq)]
 pub enum SomeIPMessageType {
     Request(),
@@ -126,6 +246,44 @@ impl From<u8> for SomeIPMessageType {
 #[derive(Debug, PartialEq)]
 pub struct SomeIPMessage {
     header: SomeIPHeader,
+}
+
+pub struct SomeIPMessageBody {}
+
+pub enum SomeIPType {
+    Float32,
+    Float64,
+    SInt8,
+    SInt16,
+    SInt32,
+    SInt64,
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
+    Struct {
+        fields: Vec<(String, SomeIPType)>,
+    },
+    StaticArray {
+        length: u32,
+        element: Box<SomeIPType>,
+    },
+    DynamicArray {
+        length_width: u8,
+        element: Box<SomeIPType>,
+    },
+    Enum {
+        variants: Vec<(u64, String)>,
+    },
+}
+
+pub enum Value {
+    Float(f64),
+    UInt(u64),
+    Int(i64),
+    Struct { fields: Vec<(String, Value)> },
+    Array(Vec<Value>),
+    Enum(String),
 }
 
 fn main() {
